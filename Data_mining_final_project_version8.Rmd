@@ -1,0 +1,1161 @@
+---
+title: "Evaluation of Machine Learning Models for Thyroid Cancer Recurrence Prediction"
+author: "Zey Sarioglan, Danielle Liu, and Diljeet Kaur"
+date: "Due 2025-05-4"
+output: 
+  html_document:
+    highlight: haddock
+    number_sections: yes
+    theme: lumen
+    toc: yes
+    toc_depth: 4
+    toc_float: yes
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '4'
+  word_document:
+    toc: yes
+    toc_depth: '4' 
+---
+```{r Setup, include=FALSE, results='hide', warning=FALSE}
+knitr::opts_chunk$set(echo = T, fig.width=8, fig.height=4)
+options(scipen = 999, digits = 3) 
+
+# Package setup
+if(!require("pacman")) install.packages("pacman")
+
+pacman::p_load(tidyverse, dplyr, psych, ggplot2, fastDummies, glmnet, smotefamily, caret, randomForest, pROC, skimR, patchwork, ggthemes, corrplot, 
+               gridExtra, UBL, gt, skimr, broom,
+               keras3, neuralnet, imager, ranger, tensorflow, keras, reticulate, DALEX)
+
+reticulate::use_condaenv('r-keras3_2', required = TRUE)
+transformers <- reticulate::import("transformers")
+```
+
+# Executive Summary 
+This project aimed to predict thyroid cancer recurrence using machine learning techniques and identify key risk factors to inform better patient care. We analyzed a dataset of 383 patients who received Radioactive Iodine (RAI) therapy and were monitored for at least 15 years. We examined the relationships between recurrence and 17 clinicopathologic variables, including age, gender, tumor characteristics, staging, and treatment response. 
+
+Exploratory data analysis revealed a significant class imbalance in the target variable (Recurred), suggesting the use of SMOTE (Synthetic Minority Oversampling Technique) to balance the training set. Several predictors were strongly associated with recurrence, particularly treatment response, cancer stage, age, risk classification, and lymph node involvement.
+
+We developed and compared three machine learning models: (1) logistic regression (with LASSO and backward selection), (2) neural network, and (3) random forest. Their performance was assessed based on AUC and accuracy using the test set. 
+
+The logistic regression model achieved the best performance (96% Accuracy, AUC = 95%) and identified six key predictors: Age, Gender, Tumor classification (T), Lymph node classification (N), Pathology, and Response to treatment. While the neural network and random forest models also performed well (AUCs of 95% and 93%, respectively), **logistic regression emerged as the most effective and interpretable algorithm for predicting thyroid cancer recurrence in this data set**.
+
+
+### Introduction 
+Thyroid cancer is one of the most common endocrine malignancies, and while treatment is often effective, **recurrence remains a significant clinical concern.** Accurately predicting which patients are at higher risk for recurrence can greatly enhance long-term management and follow-up strategies.
+
+**This project aims to develop machine learning models to predict thyroid cancer recurrence and to identify key predictive variables associated with recurrence risk.** By uncovering these factors, we hope to inform more personalized and effective approaches to patient care and treatment planning.
+
+
+### Objectives 
+**Overall Question**
+
+* What are the risk factors for thyroid cancer recurrence?
+
+**Primary Research Question**
+
+* What machine learning models can best predict thyroid cancer recurrence based on the variables in our data set?
+
+**Sub-Research Questions**
+
+1) Are thyroid cancer recurrences more common in men or women?
+2) How does age affect recurrence risk?
+3) Can we predict recurrence based on tumor staging and pathology?
+4) What is the relationship between treatment response and recurrence?
+
+
+### Summary of Exploratory Data Analysis and Data Visualization
+* The outcome variable of interest, `Recurred`, is **highly imbalanced**:
+  * 275 patients did **NOT** recur
+  * 108 patients **did** recur
+  * This imbalance motivated our use of **SMOTE** to **balance the training data prior to model training** (which we explained further in the Analysis section of the report).
+* Our analysis identified several variables that are **strongly associated and/or correlated** with cancer recurrence (via Cramér’s V and correlation analysis):
+  * `Response` to treatment (strongest association) 
+  * ``Stage`` of cancer (a very strong association - specifically for Stage I)
+  * Older ``Age`` is also associated with higher recurrence risk
+  * `Risk` classification
+  * Tumor classification (`T`)
+  * Lymph node involvement (`N`)
+  * ``Adenopathy`` status
+* We provide visual confirmations of the associations between `Recurred` and `Response`, `Stage`, and `Age`.
+* Our exploration also revealed inter-variable relationships that we should keep aware for modeling to avoid multicolinearity. These include the following:
+  * `Stage` (Stage I) and `Age` (which we provide visual confirmation of)
+  * `Stage` and `Risk` (Risk_High)
+  * `Adenopathy`  and `Risk`
+  * `Adenopathy` and `N` (N_N1b)
+  * `M` and `Risk` (High Risk)
+  * `Gender` and `Smoking` 
+  * `M` and `Stage` (Stage_IVB)
+* These insights from EDA directly informed model design in the subsequent analysis phase.
+
+
+
+### Summary of Analysis - Model Comparison based on AUC & Accuracy
+
+* First, we split the data into training and testing sets (80/20 split).
+* Then, we applied **SMOTE** to our **training data set** before performing any modeling. 
+  * SMOTE stands for **Synthetic Minority Over-sampling Technique**. It is a method used in imbalanced classification problems to address the issue where the predicted class (in our case, `Recurred`) has far fewer examples than the other. To be more specific, SMOTE generates new ("synthetic") data points of the minority class (in our case `Recurred` - YES) by interpolation to create new, plausible points within the minority class region. 
+  * In addition, SMOTE was applied to the training data set only, not the testing data set, because SMOTE-oversampling the test data would artificially inflate performance metrics and violate the principle of evaluating the model on unseen, real-world distributions.
+* The **SMOTE-balanced training set** was then used to train our models, since **these models are sensitive to class imbalance**. The models were assessed using the **testing data**. Specifically, the models we compared (based on AUC and accuracy) are:
+
+    1. **LASSO + Logistic Regression + Backwards Selection**
+
+* Since LASSO cannot handle categorical variables directly, **we first performed one-hot encoding on the training data set**. One-hot encoding converts categorical variables into a binary (0 and 1) format. During the encoding, we set the most frequent level as reference for all factor variables, which helps to avoid multicolinearity. 
+
+* To improve model interpretability, we used the factor levels selected by LASSO to identify the corresponding original variables, and **then performed logistic regression on the original (non–one-hot encoded) training data set**.
+
+* **Lastly, we applied backward selection to the logistic regression model** to identify the most important variables. This was done using the drop1() function, which performs a likelihood ratio test (based on the chi-squared distribution) to assess whether removing each variable significantly worsens model performance.
+
+* The following variables are included our **final logistic regression model** (and the EDA correlation/association analysis showed that these variables are not strongly correlated/associated with eachother, indicating that multicolinearity is likley not a concern): 
+          * `Age`
+          * `Gender`
+          * `T`
+          * `N`
+          * `Pathology`
+          * `Response`
+      * We used the testing data set to evaluate the final logistic regression model's performance using AUC and accuracy metrics (based on a 0.5 classification threshold).
+        * **Accuracy = 0.961**
+        * **AUC = 0.958**
+        
+    2. **Neural Network**
+    * Since neural networks cannot handle categorical variables directly, **we first performed one-hot encoding on the training data set**. We did not set a reference level in the one-hot encoding, because neural networks are not sensitive to multicollinearity in the same way as linear models, and including all levels allows the model to fully learn the relationships across all categories.
+    * We built a neural network with a single hidden layer of 20 neurons and a sigmoid-activated output layer for binary classification.
+    * To improve interpretability, we used the `lime` package, which explains individual predictions by identifying the most influential features for each case.
+    * We trained a neural network model using the **keras** package in R. The model architecture consisted of: 
+      * One hidden layer with 20 neurons
+      * A ReLU activation function in the hidden layer
+      * A dropout layer (rate = 0.2) to reduce overfitting
+      * A single output neuron with a sigmoid activation function, appropriate for binary classification
+      * The model was trained for 20 epochs with a batch size of 64, using 85% of the training data and 15% for validation.*
+    * We then tried to **interpret** the neural network using **DALEX (Descriptive mAchine Learning EXplanations)**, a model-agnostic R package for explaining complex models, such as neural networks. It provides **global interpretability** by assessing how much each input feature contributes to model performance using **permutation-based variable importance.**  Dalex showed that the **most important variables** in the neural network model are the following (based on their **global contribution to prediction accuracy**):
+      * `Risk` (Low, High, Intermediate)
+      * `Response` (Excellent, Structural_Incomplete)
+      * `Stage` (II, I)
+      * `Adenopathy` (No)
+      * `Smoking` (yes)
+
+    * We used the one-hot-encoded testing data set to evaluate the neural network model's performance using AUC and accuracy metrics (based on a 0.5 classification threshold).
+        * **Accuracy = 0.842**
+        * **AUC = 0.953**
+    
+    3. **Random Forest**
+      * We trained a random forest model on the SMOTE-balanced training data set (which was **not one-hot encoded**, as Random Forest can handle categorical variables directly in R). The model was built on **500 decision trees** and **considered 5 randomly selected predictors** at each tree split.
+      * **In our random forest model, the most important variables (based on MeanDecreaseGini and MeanDecreaseAccuracy)** were:
+        * `Response` 
+        * `Risk`
+        * `Adenopathy`
+        * `N`
+        * `T`
+        * `Age`
+        * `Gender`
+      * We used the testing data set to evaluate the random forest model's performance using AUC and accuracy metrics (based on the default 0.5 classification threshold).
+        * **Accuracy = 0.935**
+        * **AUC = 0.934**
+      
+
+
+### Conclusions 
+We combined exploratory data analysis with three machine learning methods in our investigation to explore and predict thyroid cancer recurrence outcomes. The exploratory analysis revealed key clinical variables (i.e., treatment response, cancer stage, tumor classification, lymph node involvement, and patient age) that are strongly associated with recurrence. We also identified several inter-variable associations that required attention to avoid multicollinearity during modeling.
+
+To address the class imbalance in the outcome variable (Recurred), we applied SMOTE (Synthetic Minority Oversampling Technique) to the training data set prior to model training. This step was important to improve model performance and ensure non-biased training. The performance of three models (1) logistic regression (with LASSO and backward selection), (2) a neural network, and (3) a random forest was then compared using AUC and accuracy on the test data.
+
+All three models demonstrated strong performance, but the logistic regression model slightly outperformed the others with the highest AUC (95%) and accuracy (96%). The neural network followed closely, achieving an AUC of 95%, while the random forest model achieved an AUC of 93%. These results confirm that models can achieve high predictive accuracy with thoughtful feature selection. 
+
+Importantly, each model highlighted overlapping yet slightly different sets of predictive variables. While response to treatment and risk classification were consistently ranked among the most important, neural networks also captured additional nonlinear interactions, such as the role of smoking status. These differences highlight the importance of model triangulation in clinical prediction tasks, particularly in complex conditions such as cancer recurrence.
+
+Overall, this analysis highlights the feasibility of using machine learning to predict thyroid cancer recurrence and supports the clinical relevance of several key patient characteristics. The next steps could involve external validation, integrating temporal or genetic data, and exploring how these models might support clinical decision-making in practice.
+
+
+  
+
+# Exploratory Data Analysis and Data Visualization
+### Goal: Understand the data set, clean the data set, and visualize the distributions of important variables.
+```{r, echo=FALSE, message=FALSE}
+# Read in the the data 
+setwd("/Users/dilkaur/Desktop/PhD_Classes/2025Spring_STAT571_ModernDataMining/Final_project/")
+thy <- read.csv("data/Thyroid_Diff.csv")
+```
+
+### EDA Part 0: Data Overview
+* This dataset focuses on thyroid cancer recurrence after Radioactive Iodine (RAI) therapy. 
+* The data was collected over 15 years. Each patient was followed for at least 10 years. 
+* It contains **383 patient records with 17 key clinicopathologic variables.** The 17 variables are as follows: 
+  1. Age : Age of the patient (in years). 
+  2. Gender : Patient's biological sex (Male or Female).
+  3. Smoking : Current Smoking status (Yes or No).
+  4. Hx.Smoking : History of smoking (Yes or No).
+  5. Hx Radiotherapy : history of radiation therapy to the head and neck region (Yes or No).
+  6. Thyroid function (classified as euthyroid, clinical or subclinical hypo/hyperthyroidism),
+  7. Physical.Examination : Presence of goiter (thyroid gland englargement) based on physical examination (diffuse, single nodular goiter on the left or right lobe, multinodular, or normal).
+  8. Adenopathy : Presence of lymph node involvement based on physical examination. (Yes or no)
+  9. Pathology : Pathological subtype of thyroid cancer (papillary, micropapillary, follicular, Hürthle cell).
+  10. Focality : Tumor focality (Uni-Focal or Multi-Focal).
+  11. Risk : Cancer risk classification according to ATA guidelines (Low, Intermediate, High).
+  12. T : Tumor classification (T1, T2, etc.).
+  13. N : Lymph node classification (N0, N1, etc.).
+  14. M : Metastasis classification (M0, M1, etc.).
+  15. Stage : Cancer staging (Stage I, II, III, IA, IVB).
+  16. Response : Initial reatment response (excellent, indeterminate, biochemical incomplete, structurally incomplete).
+  17. **Recurred : Whether cancer recurred, whether locoregional or distant metastasis (Yes or No).**
+* The target variable is `Recurred`, which indicates whether the patient experienced cancer recurrence after treatment.
+* Note: **The dataset is unbalanced, with 275 patients not experiencing recurrence and 108 patients experiencing recurrence**.
+* This [data set](https://www.kaggle.com/datasets/joebeachcapital/differentiated-thyroid-cancer-recurrence) is a modified version of the original dataset. 
+
+### EDA Part 1: Understanding and Cleaning the Data
+
+```{r, echo=FALSE, results=FALSE}
+dim(thy) # There are 17 variables with 383 observations 
+names(thy) # Variable names include "Age", "Gender", "Smoking", etc. 
+sum(is.na(thy)) # There are no missing values
+str(thy) # All variables are characters except age 
+skim(thy) # There are no missing values. There are 16 character variables and 1 numeric variable (Age)
+head(thy)
+```
+
+* There are 17 variables and 383 observations.
+* Variable names include "Age", "Gender", "Smoking", etc. 
+* There are no missing values.
+* All variables are characters except age. 
+
+
+### EDA Part 2: Visualizing Distributions of Important Categorical Variables
+
+```{r, echo=FALSE, results=FALSE}
+# Visualize categorical variable distributions
+
+# Gender distribution
+p1 <- ggplot(thy, aes(x=Gender)) + 
+  geom_bar(fill='skyblue') + 
+  ggtitle('Figure 1: Gender') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.x = element_blank())
+# Smoking status distribution
+p2 <- ggplot(thy, aes(x=Smoking)) + 
+  geom_bar(fill='salmon') + 
+  ggtitle('Figure 2: Smoking Status') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+# Thyroid Function distribution
+p3 <- ggplot(thy, aes(x=Stage)) + 
+  geom_bar(fill='lightgreen') + 
+  ggtitle('Figure 3: Cancer Stage') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+p4 <- ggplot(thy, aes(x=Pathology)) + 
+  geom_bar(fill='plum1') + 
+  ggtitle('Figure 4: Cancer Pathology') +
+    theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=6, angle = 45, hjust = 1),
+        axis.title.x = element_blank())
+
+p5 <- ggplot(thy, aes(x=Focality)) + 
+  geom_bar(fill='tan1') + 
+  ggtitle('Figure 5: Cancer Focality') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+p6 <- ggplot(thy, aes(x=Thyroid.Function)) + 
+  geom_bar(fill='lightpink') + 
+  ggtitle('Figure 6: Thyroid Function') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=6, angle = 45, hjust = 1),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+p7 <- ggplot(thy, aes(x=`M`)) + 
+  geom_bar(fill='paleturquoise2') + 
+  ggtitle('Figure 7: Thyroid Cancer\nMetastasis Classification') +
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+p8 <- ggplot(thy, aes(x=Response)) + 
+  geom_bar(fill='gray66') + 
+  ggtitle('Figure 8: Thyroid Cancer\nTherapy Response')+
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=6, angle = 45, hjust = 1),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+p9 <- ggplot(thy, aes(x=Recurred)) + 
+  geom_bar(fill='khaki') + 
+  ggtitle('Figure 9: Thyroid Cancer\nRecurrence')+
+  theme(plot.title = element_text(size = 10),
+        axis.text.x = element_text(size=8),
+        axis.title.y = element_blank(),
+        axis.title.x = element_blank())
+
+
+
+# Arrange in 3 rows, 3 columns
+(p1 + p2 + p3) 
+(p4 + p5 + p6) 
+(p7 + p8 + p9) 
+
+```
+
+```{r, echo=FALSE, results=FALSE}
+table(thy$Gender) # There are 241 more females in the data set than males 
+
+table(thy$Risk) # There are more individuals in the data set that have low risk than intermediate risk and high risk. There are only 32 individuals that have high risk 
+
+table(thy$Response) # The most common Response in the data set is Excellent. Only 23 individuals have Biochemical Incomplete responses
+
+table(thy$Stage)
+
+table(thy$Focality)
+
+table(thy$Thyroid.Function)
+
+table(thy$M)
+
+```
+
+
+* **Figure 1**: There are more females than males in the dataset, with 241 more females represented.
+* **Figure 2**: There are more subjects who do not smoke than those who do.
+* **Figure 3**: Stage 1 is the most common thyroid cancer stage. Importantly, there are only 4 observations for Stage 3 and 3 observations for Stage 4.
+* **Figure 4**: The most common pathology in the dataset is Papillary.
+* **Figure 5**: The most common focality in the dataset is Unifocal. 136 individuals have multifocality, while 247 individuals have unifocality.
+* **Figure 6**: The most common thyroid function in the dataset is Euthyroid.
+* **Figure 7**: The most common metastasis classification in the dataset is M0. Only 18 individuals are classified as M1 (metastasized).
+* **Figure 8**: The most common treatment response is Excellent. Only 23 individuals have a Biochemical Incomplete response.
+* **Figure 9**: The most common recurrence outcome is “No.” **275 individuals did not recur, while 108 individuals did.**
+
+
+
+### EDA Part 3: Visualizing Distribution of Numerical Variable (Age)
+
+```{r, echo=FALSE, results=FALSE}
+summary(thy$Age) # The median age is 37 years old and the mean age is 40.9 years old. The minimum age and maximum age in the data set are 15 and 82 years old, respectively
+```
+
+```{r, echo=FALSE}
+p_age <- ggplot(thy, aes(x=Age)) + 
+  geom_histogram(binwidth=5, fill='steelblue', color='black') + 
+  ggtitle('Figure 10: Age Distribution')
+
+p_age # The Age distribution is right skewed 
+```
+
+
+* Figure 10 shows that the Age distribution is right skewed. The median age is 37 years old and the mean age is 40.9 years old. The minimum age and maximum age in the data set are 15 and 82 years old.
+
+
+### EDA Part 4: Variable Association Analysis 
+
+* We check the association between each of the variables in the dataset. 
+* Since the dataset is mostly categorical, we used the **Cramer's V** test to do this, which tests for associations between vairables rather than correlations.
+* **Cramer's V test:** based on Pearson's chi-squared statistic and is used to measure the strength of association between two categorical variables. The value of Cramér's V ranges from 0 to 1, where 0 indicates no association and 1 indicates a perfect association.
+```{r, echo=FALSE, results=FALSE}
+
+cramersV_matrix <- function(data) {
+  vars <- names(data)
+  n <- length(vars)
+  mat <- matrix(NA, nrow = n, ncol = n, dimnames = list(vars, vars))
+  
+  for (i in seq_along(vars)) {
+    for (j in seq_along(vars)) {
+      if (i == j) {
+        mat[i, j] <- 1
+      } else if (i < j) {
+        tbl <- table(data[[vars[i]]], data[[vars[j]]])
+        mat[i, j] <- DescTools::CramerV(tbl)
+        mat[j, i] <- mat[i, j]
+      }
+    }
+  }
+  mat
+}
+
+cramer_matrix <- cramersV_matrix(thy)
+corrplot::corrplot(cramer_matrix, 
+                   is.corr = FALSE, 
+                   method = "color",
+                   type = "upper",             
+                   tl.col = "black",
+                   title = "Figure 11: Cramér's V Association Between Variables",
+                   mar = c(0, 0, 2, 0))      
+
+
+```
+
+
+The association plot in Figure 11 show the following:
+
+* The strongest association is between the variable `Response` and the predictor variable `Recurred`. This suggests that the response to treatment is related to the likelihood of recurrence, and our model should account for this. 
+* Other strong associations with `Recurred` include `Adenopathy`, `Risk`, `T` (tumor clssification), and `N` (Lymph node classification)
+* `Stage` and `M` seem to be strongly associated with each other, so we should keep that in mind if they are included in our final model. (To be more specific, if we use dummy variables created from categorical predictors in our regression model(s), and two variables have a high Cramér’s V, that could translate into multicollinearity among those dummy variables.)
+
+
+### EDA Part 5: Variable Correlation Analysis 
+
+* Here, we check the correlation between every variable in our dataset
+* We do this by first performing full **one-hot encoding** on the categorical variables, and then using **Pearson's correlation** to check the correlation between the one-hot encoded variables.
+* Note: **One-hot encoding**: creates binary columns (0 or 1) for each category in the categorical variables.
+
+```{r, fig.width=8, fig.height=8, echo=FALSE, results=FALSE}
+
+# Full one-hot encoding (for corrplot)
+thy_matrix_subset <- dummy_cols(thy, 
+                         remove_first_dummy = FALSE, 
+                         remove_selected_columns = TRUE)
+
+# Compute correlation matrix
+cor_matrix <- cor(thy_matrix_subset)
+
+
+# Plot the correlation matric 
+corrplot::corrplot(cor_matrix, 
+                   is.corr = FALSE, 
+                   method = "color",
+                   type = "upper",             
+                   tl.col = "black",
+                   tl.cex = 0.6,
+                   title = "Figure 12: Pearson's Correlation of One-Hot Encoded Variables",
+                   mar = c(0, 0, 2, 0))  # top margin of 2 lines 
+
+
+```
+
+
+The correlation plot in Figure 12 show the following:
+
+* One of the strongest correlations is between the variable `Response` (Specifically, "Response_Structural_Incomplete" and "Response_Excellent") and the predictor variable `Recurred`. This suggests that the response to treatment is related to the likelihood of recurrence, and our model should account for this.
+* There is also strong correlations between:
+  * `Reccured` and `Stage` (Stage_I), 
+  * `Recurred` and `N` (N0 and N1b)
+  * `Recurred` and `Risk` (Risk_Low).
+  * `Recurred` and `Adenopathy` (Adenopathy_No)
+* Other variables with strong correlation that should be kept in mind during modeling with one-hot encoding due to risk of multicolinaerity:
+  * `Age` and `Stage` (Stage I)
+  * `Stage` and `Risk` (Risk_High)
+  * `Adenopathy` (Adenopathy_No) and `Risk`
+  * `Adenopathy` (Adenopathy_No) and `N` (N_N1b)
+  * `M` and `Risk` (Risk_High)
+  * `Gender` and `Smoking` 
+  * `M` and `Stage` (Stage_IVB)
+
+
+### EDA Part 6: Exploratory visual exploration of the distribution of `Age` by certain important categorical variables
+* We are interested in visually detecting whether the distribution of age varies depending on Recurrence status. While the above analysis showed that `Age` and `Recurred` are not strongly associated and correlated, we are still interested in   visually exploring their interaction. 
+* Since we know that `Recurred` and `Reponse` are stongly associated and correlated, we are also interested in visually exploring the interaction between `Age` and `Response`.
+* Since we know that `Recurred` and `Stage` are associated and correlated, we are also interested in visually exploring the interaction between `Age` and `Stage`.
+* In addition, `Age` and `Hx.Radiotherapy` showed strong association, we investigate how Age differs by Hx.Radiotherapy status.
+*We use boxplots to visualize the distribution of Age by these categorical variables.
+```{r, figure.width = 8, figure.height=8, echo=FALSE, results=FALSE}
+#install.packages("ggthemes")
+library(ggthemes)
+
+# Create box plots for Age by different categorical variables
+age_recurrence <- ggplot(thy, aes(x=Recurred, y=Age, fill=Recurred)) + 
+  geom_boxplot() + 
+  ggtitle('Figure 13: Age Distribution\nby Recurrence') +
+  theme_minimal() +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+age_response <- ggplot(thy, aes(x=Response, y=Age, fill=Response)) + 
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle('Figure 14: Age Distribution\nby Response') +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1, size=5),
+        legend.position = "none")
+
+age_stage <- ggplot(thy, aes(x=Stage, y=Age, fill=Stage)) + 
+  geom_boxplot() + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggtitle('Figure 15: Age Distribution\nby Cancer Stage') +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none")
+
+
+age_radiotherapy <- ggplot(thy, aes(x=Hx.Radiothreapy, y=Age, fill=Hx.Radiothreapy)) + 
+  geom_boxplot() + 
+  theme_minimal() +
+  ggtitle('Figure 16: Age Distribution\nby Radiotherapy History') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  +
+  theme(axis.title.x = element_blank(),
+        legend.position = "none")
+
+
+#age_gender - The median age for males is higher than that of females. The females have some outlier ages that are around 80 years old
+#age_stage - 
+#age_risk - As risk decreases, the median age and distribution size decreases. There are some outlier ages for low risk 
+#age_response
+
+
+#(age_gender + age_risk) / (age_stage + age_response)
+grid.arrange(age_recurrence, age_response, age_stage, age_radiotherapy, ncol=2, nrow=2)
+```
+
+
+* **Figure 13** shows that the median age for those who have recurred is higher than those that haven't.
+* **Figure 14** shows that there is not substantial difference between patient age and response to treatment.
+* **Figure 15** shows that the median age for those with Stage I is lower than those with other stages. 
+* **Figure 16** shows that the median age for those who have received Radiotherapy is higher than those that haven't
+
+
+
+### EDA Part 7: Exploratory Visual Comparison of Recurrence by Stage and Treatment Response
+* Since `Recurred` is associated with both `Response` and `Stage`, we visually examine how its distribution varies across these variables individually and jointly.
+* To explore these patterns, we use stacked bar plots to compare `Recurred` frequencies within `Response` and `Stage` levels and their combination.
+* This exploratory visualization may reveal subgroup-specific trends that warrant further exploration in our modeling.
+```{r, figure.width=6, figure.height=4, echo=FALSE, results=FALSE}
+
+thy_bar_recur_1 <- 
+  thy %>%
+  group_by(Recurred, Response) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  ggplot(aes(x = Recurred, y = count, fill = Response)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  labs(title = "Figure 16: Recurrence by Response", x = "Recurred", y = "Count") +
+  theme_minimal()
+
+thy_bar_recur_2 <- 
+  thy %>%
+  group_by(Recurred, Stage) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  ggplot(aes(x = Recurred, y = count, fill = Stage)) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  labs(title = "Figure 16: Recurrence by Stage", x = "Recurred", y = "Count") +
+  theme_minimal()
+
+thy_bar_recur_3<- 
+  thy %>%
+  group_by(Stage, Recurred, Response) %>%
+  summarise(count = n(), .groups = "drop") %>%
+  ggplot(aes(x = Stage, y = count, fill = Response)) +
+  facet_wrap(~ Recurred) +
+  geom_bar(stat = "identity", position = "stack", width = 0.5) +
+  labs(title = "Figure 18: Recurrence by Both Stage and Response", x = "Stage", y = "Count") +
+  theme_minimal()
+
+#grid.arrange(thy_bar_recur_1, thy_bar_recur_2, thy_bar_recur_3, ncol=1, nrow=3)
+
+thy_bar_recur_1
+thy_bar_recur_2
+thy_bar_recur_3
+```
+
+
+* **Figure 16** shows that the response to treatment is related to the likelihood of recurrence, and our model should account for this. 
+  * Specifically, if the response to treatment is "Excellent" or "Indeterminate", you are a lot more likely to **NOT** get recurrence. 
+  * If the response to treatment is "Biochemical Incomplete", there is no statistically significant impact on recurrence risk. 
+  * If the response to treatment is "Structural Incomplete", you are a lot more likely to get recurrence.
+* **Figure 17** shows that the stage of cancer is related to the likelihood of recurrence, and our model should account for this. 
+  * Specifically, if the stage of cancer is Stage I, you are a lot more likely to not get recurrence. 
+  * If the stage of cancer is Stage II, III, or IV, you are a lot more likely to get recurrence.
+* **Figure 18** shows that the response to treatment and stage of cancer are related to the likelihood of recurrence, and our model should account for this. 
+  * Based on this figure, **we theorize that if the thyroid cancer is Stage I, it typically responds well to treatment (Excellent), and this causes it not to recur** 
+  * **Additionally, if the thyroid cancer is Stage II, Stage IVA, or Stage IVB, is is a lot more likely to respond "Structurally Incomplete" to treatment, which causes it to recur.**
+  
+* ***Overall, we theorize that the response to treatment and stage of cancer are related to the likelihood of recurrence, and our model should account for this.***
+
+
+
+# Data Analysis
+## Goal: What machine learning models can best predict thyroid cancer recurrence based on other variables in our dataset? 
+## Approach: 
+
+* Split the data into training and testing sets (80/20 split)
+* Apply SMOTE (Synthetic Minority Over-sampling Technique) to balance the data set's `Reccurred` variable
+* Apply One-Hot Encoding to the training and testing data sets
+* Compare the following models on the training data set by using the metrics AUC and MCE. 
+  * 1) LASSO + Logistic Regression (train on SMOTE-balanced training data set that is one-hot encoded)
+  * 2) Neural Network (train on SMOTE-balanced training data set that is one-hot encoded)
+  * 3) Random Forest + Decision Tree (train on SMOTE training data set that is **not** one-hot encoded)
+  
+
+### Analysis Part 1: Splitting Data into Training and Testing Sets
+* Goal: Split the data into training and testing sets (80/20 split)
+
+```{r, echo=FALSE} 
+
+#convert every variable (Except age) in the thy data set to a factor
+thy[-1] <- lapply(thy[-1], as.factor)
+
+# Separating the data set into training and testing data
+N <- length(thy$Age)
+n1 <- floor(.8*N)
+n2 <- floor(.2*N)
+
+set.seed(123) 
+
+# Split data to three portions of .8, .2 of data size N
+idx_train <- sample(N, n1)
+idx_no_train <- (which(! seq(1:N) %in% idx_train))
+idx_test <- sample(idx_no_train, n2)
+
+
+#Create training and testing data sets
+thy_data.train <- thy[idx_train,]
+thy_data.test <- thy[idx_test,]
+```
+
+
+### Analysis Part 2: SMOTE to Balance the Training Dataset's `Recurred` Variable (Response Variable)
+
+* We applied **SMOTE** to our **training data set** before performing any modeling. 
+* SMOTE stands for **Synthetic Minority Over-sampling Technique**. It is a method used in imbalanced classification problems to address the issue where the predicted class (in our case, `Recurred`) has far fewer examples than the other.
+* To be more specific, SMOTE generates new ("synthetic") data points of the minority class (in our case `Recurred` - YES) by  interpolation to create new, plausible points within the minority class region.  It does this by selecting a minority example and generating new points along the line segments between it and its nearest minority neighbors in feature space.
+* We used the `UBL` package's `SmoteClassif` function to balance our data set. This function was built to handle categorical features properly using nearest neighbors that respect nominal features 
+* This function makes sense for out data frame because the predicted variable - `Recurred` - is a categorical, as are most predictor variables)
+* In addition, **our data set meets the assumptions of the `SmoteClassif` algorithm: The target variable is a factor, and some predictors are factors too.**
+* The **SMOTE-balanced training set** will be used for out models that are sensitive to class imbalance. These are:
+    * **LASSO + Logistic Regression**
+    * **Neural Network**
+    * **Random Forest**
+
+```{r, echo=FALSE}
+# Assume: target is a factor, and some predictors are factors too
+set.seed(123)
+
+#Set the C.perc.list which tells SMOTE how much to over/undersample each category 
+C.perc.list <- list("No" = 1, "Yes" = 219 / 87)  
+
+#Run SMOTE 
+thy_data.train.balanced <- SmoteClassif(Recurred ~ ., 
+                                  thy_data.train, 
+                                  C.perc = C.perc.list, 
+                                  k = 5, 
+                                  dist = "HEOM")  # HEOM handles mixed-type data
+
+table(thy_data.train$Recurred) %>%
+  as.data.frame() %>% 
+  rename("Recurrence"= Var1, "Count"= Freq) %>%
+  gt() %>%
+  tab_header(title = "Training Data's Class Distribution Before SMOTE")
+
+table(thy_data.train.balanced$Recurred) %>%
+  as.data.frame() %>% 
+  rename("Recurrence"= Var1, "Count"= Freq) %>%
+  gt() %>%
+  tab_header(title = "Training Data's Class Distribution After SMOTE")
+
+```
+
+
+* **As we can see, SMOTE balanced the `Recurred` variable in our training dataset**
+
+
+### Analysis Part 3: One-hot encoding of SMOTE training data set 
+* We perform one-hot encoding to convert categorical variables into binary (0/1) indicators, making them suitable for machine learning models that require numeric input.
+* One-Hot encoding is a process of converting categorical variables into a binary (0 and 1) format that can be provided to machine learning algorithms to do a better job in prediction.
+* In our case, we will use the `fastDummies` package to perform One-Hot encoding on our data set.
+* In addition, we will set the most frequent level as reference for all factor variables. **It is important to set a reference level for the One-Hot Encoding Matrix, because it helps to avoid multicolinearity and ensure model idenifiability when using the dummy variables in modeling.**
+* One-hot encoding will be used for models that require that cannot handle factor data directly (such as LASSO and neural network). These include the following models that we perform in our analysis:
+    * **LASSO + Logistic Regression**
+    * **Neural Network**
+    * Note: We will **not** use the one-hot encoded data for the **Random Forest** model. It does not require one-hot encoding, as it **can handle categorical variables directly**. 
+```{r, echo=FALSE}
+# Set the most frequent level as reference for all factor variables
+factor_vars <- sapply(thy_data.train.balanced, is.factor)
+thy_data.train.balanced[factor_vars] <- lapply(thy_data.train.balanced[factor_vars], function(x) {
+  relevel(x, ref = names(sort(table(x), decreasing = TRUE))[1])})
+#Change the reference for a few variables only 
+thy_data.train.balanced$Physical.Examination <- relevel(thy_data.train.balanced$Physical.Examination, ref = "Normal")
+thy_data.train.balanced$Response <- relevel(thy_data.train.balanced$Response, ref = "Indeterminate")
+thy_data.train.balanced$T <- relevel(thy_data.train.balanced$T, ref = "T1a")
+
+
+# For each factor variable, print its reference level
+cat("Reference levels for factor variables:\n")
+for (var in names(thy_data.train.balanced)[factor_vars]) {
+  cat(paste0("Variable: ", var, "\n"))
+  print(paste("Levels:", paste(levels(thy_data.train.balanced[[var]]), collapse = ", ")))
+  print(paste("Reference level:", levels(thy_data.train.balanced[[var]])[1]))
+  cat("\n")}
+
+
+# Identify factor variables in training set
+factor_vars <- sapply(thy_data.train.balanced, is.factor)
+# Apply the same factor levels and reference levels to test set
+for (var in names(factor_vars)[factor_vars]) {
+  train_levels <- levels(thy_data.train.balanced[[var]])
+  thy_data.test[[var]] <- factor(thy_data.test[[var]], levels = train_levels)
+}
+
+
+
+# Convert factors to one-hot encoded matrix (drop the reference to prevent multicolinaerity when using the dummy variables in regression)
+thy_data.train.balanced.matrix <- dummy_cols(thy_data.train.balanced,
+                                             remove_first_dummy = TRUE,            # drop reference
+                                             remove_selected_columns = TRUE)        # drop original factor columns
+thy_data.test.matrix <- dummy_cols(thy_data.test,
+                                   remove_first_dummy = TRUE,            # drop reference
+                                  remove_selected_columns = TRUE)        # drop original factor columns
+
+# Show that one-hot encoding was applied 
+cat("One-hot encoding was applied; Here are the first five rows of the one-hot encoded training data matrix:\n") 
+thy_data.train.balanced.matrix %>%
+  head() %>%
+  as.data.frame() %>%
+  gt() %>%
+  tab_header(title = md("**First five observations – after applying One-Hot Encoding to Training data**"))
+
+cat("\nOne-hot encoding was applied; Here are the first five rows of the one-hot encoded testing data matrix:\n") 
+thy_data.test.matrix %>%
+  head() %>%
+  as.data.frame() %>%
+  gt() %>%
+  tab_header(title = md("**First five observations – after applying One-Hot Encoding to Testing data**"))
+```
+
+
+
+### Analysis Part 4: **Model 1 - LASSO followed by Logistic Regression followed by Backwards Selection**
+* **Goal:** Use LASSO to select the most important variables, and then use those variables to fit a logistic regression model.
+* LASSO (Least Absolute Shrinkage and Selection Operator) is a regression analysis method that performs both variable selection and regularization to enhance the prediction accuracy and interpretability of the statistical model it produces.
+* LASSO is particularly useful when we have a large number of predictors, and we want to identify the most important ones while also preventing overfitting.
+* Logistic regression is a statistical method for predicting binary classes. Our outcome variable (`Recurred`) is a binary variable (0/1). 
+* **Use one-hot-encoded SMOTE-balanced training data set for LASSO.** 
+* **Then use the selected variables to fit a logistic regression model (on non-one-hot-encoded training dataset).**
+* **Finally, use backwards selection to select the most important variables in the logistic regression model.**
+  * We performed the backwards selection using the **drop1() function in R.** This **evaluates the impact of removing individual terms (predictors) from a fitted model**, one at a time, to assess whether their exclusion significantly degrades model fit. **It is based on the a likelihood ratio test (using chi-square distribution)**. 
+  * Importantly, for categorical  variables, drop1() evaluates the entire factor as a unit (i.e., all its levels). This is particularly important for out dataset, as it contains mostly categorical variables. 
+  * In addition, Likelihood Ratio tests used in drop1()  are  more robust than Wald tests (Anova()) for logistic regression. 
+  
+##### Model Fitting 
+```{r, echo=FALSE, warning=FALSE}
+
+y <- thy_data.train.balanced.matrix$Recurred_Yes
+X <- thy_data.train.balanced.matrix %>% select(-Recurred_Yes) %>% as.matrix()
+lasso_fit <- glmnet(X, y, family = "binomial", alpha = 1)
+cv_fit <- cv.glmnet(X, y, family = "binomial", alpha = 1)
+
+# Plot CV curve
+#plot(cv_fit)
+
+# Best lambda
+best_lambda <- cv_fit$lambda.min
+#coef(cv_fit, s = "lambda.min")
+
+# Get coefficients at optimal lambda
+lasso_coefs <- coef(cv_fit, s = "lambda.min")
+
+# Convert to a named vector
+lasso_coefs <- as.matrix(lasso_coefs)
+selected_vars <- rownames(lasso_coefs)[which(lasso_coefs != 0)]
+selected_vars <- setdiff(selected_vars, "(Intercept)")  # Remove intercept
+
+
+#Use selected)_vars to create a new formula for the logistic regression model. Make sure we include all levels of a variable if it is selected. 
+selected_formula <- as.formula(Recurred ~ Age + Gender + Thyroid.Function + Risk + `T` + N + Pathology + Adenopathy + Response + Stage)
+
+refit_model <- glm(selected_formula, data = thy_data.train.balanced, family = binomial)
+#summary(refit_model)
+```
+
+```{r, echo=FALSE, results=FALSE, warning=FALSE}
+# Perform backwards selection using drop1()
+
+#Backwards selection step 1
+drop1(refit_model, test = "Chisq")
+refit_model_1 <- update(refit_model, . ~ . - Risk)
+summary(refit_model_1)
+#drop1(refit_model_1, test = "Chisq")
+
+#Backwards selection step 2
+refit_model_2 <- update(refit_model_1, . ~ . - Stage)
+summary(refit_model_2)
+drop1(refit_model_2, test = "Chisq")
+
+#Backwards selection step 3
+refit_model_3 <- update(refit_model_2, . ~ . - Adenopathy)
+summary(refit_model_3)
+drop1(refit_model_3, test = "Chisq")
+
+#Backwards selection step 4
+refit_model_4 <- update(refit_model_3, . ~ . - Thyroid.Function)
+summary(refit_model_4)
+drop1(refit_model_4, test = "Chisq")
+
+#Final model 
+refit_model_final <- refit_model_4
+```
+
+```{r, echo=FALSE, warning=FALSE}
+cat("Coefficient Estimates and Level-wise Significance:\n")
+# Extract summary table as data frame
+summary_df <- broom::tidy(refit_model_final)
+# Round and clean
+summary_df_clean <- summary_df %>%
+  select(term, estimate, std.error,  p.value) %>%
+  mutate(across(where(is.numeric), ~ round(., 3)))
+# Make it pretty
+gt(summary_df_clean) %>%
+  tab_header(title = "Logistic Regression Coefficients (Wald Test) and Level-wise significance") %>%
+  cols_label(
+    term = "Variable and Level",
+    estimate = "Log-Odds Estimate",
+    std.error = "SE",
+    p.value = "p-value")
+
+
+
+cat("Overall Variable Significance:\n")
+# Run drop1 and capture the output as a data frame
+drop1_out <- drop1(refit_model_final, test = "Chisq") %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("Variable")
+# Clean and format
+drop1_clean <- drop1_out %>%
+  select(Variable, Df, `Pr(>Chi)`, LRT) %>%
+  rename(`Chi-squared` = LRT, `p-value` = `Pr(>Chi)`)
+# Round p-values
+drop1_clean <- drop1_clean %>%
+  mutate(across(where(is.numeric), ~ round(., 4)))
+drop1_clean <- drop1_clean[ -1, ] 
+# Create gt table
+gt(drop1_clean) %>%
+  tab_header(title = "Overall Variable Importance (Likelihood Ratio Test via drop1)") %>%
+  cols_label(
+    Df = "Degrees of Freedom",
+    `Chi-squared` = "LRT Statistic",
+    `p-value` = "p-value")
+```
+
+* We performed backward model selection using likelihood ratio tests via drop1(). 
+* In the final model, we report coefficient estimates and level-wise significance using Wald tests (summary()), and test overall variable importance using likelihood ratio tests (drop1()).
+* **The final model includes the following variables**:
+  * `Age`
+  * `Gender`
+  * `T`
+  * `N`
+  * `Pathology`
+  * `Response`
+  * Note: in the above EDA, none of these variables were strongly correlated/associated with each other. 
+* Note: **When we report summary()/Individual Wald test results, many factor levels are highly insignificant. But, we still retain them in our final model, because the variable as a whole is significant (drop1()).**
+  * **A factor variable can be significant overall (drop1()) even if none of its individual levels are significant (summary())**.
+  * drop1() tests the joint contribution of all levels using a likelihood ratio test
+  * summary() tests each level individually using Wald tests, which may miss small or distributed effects.
+  * **It's valid to retain the factor if drop1() shows significance, even if no single level appears strong alone. We care about the variable as a whole in our final model - not its individual levels**
+  
+##### Model Testing 
+```{r, echo=FALSE}
+
+final_model.predict <- predict(refit_model_final, newdata = thy_data.test, type = "response")
+final_model.predict.class <- ifelse(final_model.predict >= 0.5, "Yes", "No")
+
+true_labels <- thy_data.test$Recurred
+accuracy <- mean(final_model.predict.class == true_labels)
+confusion_matrix <- table(final_model.predict.class, true_labels)
+dimnames(confusion_matrix) <- list(" "= c("Predicted: No", "Predicted: Yes"),
+                                   " " = c("Actual: No", "Actual: Yes"))
+
+```
+
+```{r, echo=FALSE}
+cat(confusion_matrix)
+
+```
+
+```{r, echo= FALSE}
+cat(paste("Accuracy: ", round(accuracy, 4)))
+```
+
+
+```{r, echo=FALSE}
+# Calculate ROC curve and AUC
+
+final_model.predict.class.num <- ifelse(final_model.predict >= 0.5, 1, 0)
+true_labels.num <- thy_data.test$Recurred %>% as.numeric()
+true_labels.num <- true_labels.num - 1
+
+final_model_roc <- roc(true_labels.num, final_model.predict.class.num, plot=T, col="blue")
+AUC <- final_model_roc$auc 
+```
+
+```{r, echo = FALSE}
+# create a vector with the test metrics for later use 
+lasso_logistic <- c("Accuracy" = accuracy, "AUC" = AUC)
+```
+
+```{r, echo=FALSE}
+cat(paste("Area Under Curve: ", round(AUC, 4)))
+```
+
+* The **classification threshold** we used was 0.5
+* **Final Model Metrics**
+  * **Accuracy: 0.9605**
+  * **Area Under Curve: 0.958**
+
+
+### Analysis Part 5: **Model 2 - Neural Network**
+* Neural networks can learn complex, nonlinear feature representations, but their outputs are often difficult to interpret because the learned neurons are abstract and not directly tied to input features. They can also be prone to overfitting.
+* To address this, **we trained a neural network on the one-hot encoded, SMOTE-balanced training dataset (as neural networks require numerical input)**. 
+  * Note: We used the **one-hot encoded training dataset that contained all levels** (ie, did **not have a reference level**), because **Neural networks are not constrained by multicollinearity**.
+* We then used the **lime() function to interpret the model's predictions, by identifying which original input features contributed most to each prediction**.
+
+##### Model Fitting 
+
+* We used the `Keras` package to build the neural network model, which included:
+  * One hidden layer with 20 neurons
+  * ReLU activation function in the hidden layer
+  * Sigmoid activation in the output layer (appropriate for binary classification)
+  * An 85%/15% internal split of the training data for training and validation, respectively
+
+
+  
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results=FALSE}
+set.seed(123)
+
+#regenerate dummy testing and training datasets with all levels
+thy_data.train.balanced.matrix.new <- dummy_cols(thy_data.train.balanced,
+  remove_first_dummy = FALSE,        # keep all levels (no reference dropped)
+  remove_selected_columns = TRUE)     # drop original factor columns
+
+
+thy_data.test.matrix.new <- dummy_cols(thy_data.test,
+                                   remove_first_dummy = FALSE,            # dont drop reference
+                                  remove_selected_columns = TRUE)        # drop original factor columns
+
+
+y_train_nn <- thy_data.train.balanced.matrix.new$Recurred_Yes
+x_train_nn <- thy_data.train.balanced.matrix.new %>% select(-Recurred_Yes, -Recurred_No) %>% as.matrix()
+
+nn.model <- keras_model_sequential() %>%
+  layer_dense(units = 20, activation = 'relu', input_shape = ncol(x_train_nn)) %>%
+  layer_dropout(0.2) %>% # Dropout layer to prevent overfitting
+  layer_dense(units = 1, activation = 'sigmoid') # The number of output dimension =  (since binary) 
+
+summary(nn.model)
+
+nn.model %>% 
+  compile(optimizer = "rmsprop",
+          loss = "binary_crossentropy",
+          metrics = c("accuracy", metric_auc()))
+
+
+
+nn.model_fit <- 
+  nn.model %>% 
+  fit(x_train_nn,
+      y_train_nn,
+      epochs = 20, 
+      batch_size = 64,
+      validation_split = .15) # set 15% of the x_train_nn, y_train_nn as the validation data
+```
+
+
+* We can try **interpret the neural network model using the DALEX package.**
+  * **DALEX = Descriptive mAchine Learning EXplanations**, a model-agnostic framework for interpreting complex models such as neural networks. 
+  * The **model_parts() function in DALEX** provides global interpretability to the neural network model, by quantifying how much each input feature contributes to the model’s overall predictive performance.
+  * It does this by permuting individual features and **measuring how much the model's performance (in our case, RMSE) deteriorates when each feature is shuffled, indicating its importance**.
+  * **Overall, DALEX allows us to rank features by their global contribution to prediction accuracy.** In our case, since we had to use one-hot encoding matrix to train our data, **DALEX will interpret the importance of each categorical variable level.**
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results=FALSE}
+
+x_test_nn <- thy_data.test.matrix.new %>% select(-Recurred_Yes, -Recurred_No) %>% as.matrix()
+y_test_nn <- thy_data.test.matrix.new$Recurred_Yes
+
+# Convert training and testing matrices to data frames (Keras outputs matrices)
+x_train_df <- as.data.frame(x_train_nn)
+x_test_df  <- as.data.frame(x_test_nn)
+
+# Ensure all columns in test data are numeric (required for DALEX permutation)
+x_test_df[] <- lapply(x_test_df, as.numeric)
+
+# Align the response vector y_test_nn with any rows that may have been dropped (e.g., due to NA removal)
+y_test_nn <- y_test_nn[as.numeric(rownames(x_test_df))]
+
+# Define a prediction wrapper function for DALEX
+# This returns a numeric vector of predicted probabilities from the neural network (for class = 1)
+predict_nn_dalex <- function(model, newdata) {
+  as.numeric(predict(model, as.matrix(newdata)))
+}
+
+# Create a DALEX explainer object to wrap the neural network model
+# This object allows DALEX to query the model for predictions during interpretation
+explainer_nn <- explain(
+  model = nn.model,               # trained Keras model
+  data = x_test_df,               # test data with numeric features
+  y = y_test_nn,                  # true labels (0 or 1)
+  predict_function = predict_nn_dalex,  # custom prediction wrapper
+  label = "Neural Network",       # name used in plots
+  verbose = FALSE                 # suppress unnecessary output
+)
+
+# Compute permutation-based variable importance
+# This measures how much the model's prediction error increases when each feature is permuted
+# Using RMSE as the loss function to quantify prediction degradation
+vi_nn <- model_parts(explainer_nn, loss_function = loss_root_mean_square)
+
+# Visualize the global variable importance
+# Features that increase loss the most when permuted are the most important
+plot(vi_nn) +
+  theme(
+    text = element_text(size = 10, color = "black"),          # base text
+    axis.text = element_text(size = 6, color = "black"))      # axis tick labels
+
+```
+
+* Dalex shows that the **most important variables** in the neural network model are the following (based on their global contribution to prediction accuracy):
+  * `Risk` (Low, High, Intermediate)
+  * `Response` (Excellent, Structural_Incomplete)
+  * `Stage` (II, I)
+  * `Adenopathy` (No)
+  * `Smoking` (yes)
+
+
+  
+
+##### Model Testing 
+
+* We evaluated the performance of the neural network by using the **one-hot-encoded testing data set** (We evaluated the performance of the neural network using the one-hot encoded testing data set with all levels retained; i.e., no reference level was dropped).
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+pred_probs <- nn.model %>% predict(x_test_nn)
+pred_class <- ifelse(pred_probs >= 0.5, 1, 0)
+
+# Accuracy
+cat("Accuracy:")
+nn.accuracy <- mean(pred_class == y_test_nn)
+cat(nn.accuracy)
+cat("\n")
+
+# AUC
+nn.roc <- roc(y_test_nn, pred_probs, plot = TRUE, col = "blue", main = "ROC Curve for Neural Network")
+nn.auc <- auc(nn.roc)
+cat("AUC:")
+cat(nn.auc)
+cat("\n")
+
+#Confusion matric
+cat("Confusion Matrix:\n")
+table(Predicted = pred_class, Actual = y_test_nn)
+
+
+```
+
+* The **classification threshold** we used was 0.5
+* **Final Model Metrics**
+  * **Accuracy: 0.842**
+  * **Area Under Curve: 0.953**
+
+
+
+### Analysis Part 6: **Model 3 - Random Forest**
+* We applied the **Random Forest** algorithm to our **SMOTE-balanced training data set**.
+  * **One-hot encoding** was **not** applied, as Random Forest in R can natively handle categorical variables encoded as factors. 
+  * Therefore, the data's structure is preserved, and the model can retain the categorical nature of the variables and split on sets of factor levels in a single decision rule, instead of evaluating levels one-by-one. 
+  
+##### Model Fitting 
+```{r, echo=FALSE}
+set.seed(123)
+model_rf <- randomForest(Recurred ~ ., data = thy_data.train.balanced, ntree = 500, mtry = 5, 
+                         importance = TRUE)
+
+#importance(model_rf)
+#Plot 
+par(mfrow = c(1, 2))
+varImpPlot(model_rf, type = 1, cex = 0.7, main = "Variable Importance Plot\n(by Mean Decrease Accuracy)")
+varImpPlot(model_rf, type = 2, cex = 0.7, main = "Variable Importance Plot\n(by Mean Decrease Gini)")
+par(mfrow = c(1, 1))
+
+
+```
+
+* We can try to interpret the random forest model using the variable importance based on two metrics:
+  * **MeanDecreaseGini**: Total decrease in Gini Impurity across all trees when a given variable is used to split. 
+   * Gini Impurity measures the probability that a randomly chosen observation would be misclassified if it were randomly labeled according to the class distribution in a node. Ie, its a measure of how “mixed” the classes are in a decision tree node.
+    * **Variables with high MeanDecreaseGini are more important and frequently used to make good splits across the forest**.
+  * **MeanDecreaseAccuracy**: Indicates how much model accuracy drops when each variable is permuted (randomized). H
+    * **Variables with high MeanDecreaseAccuracy are more important and more crucial to predictive power**.
+* **In our random forest model, the most important variables (based on MeanDecreaseGini and MeanDecreaseAccuracy)** are:
+  * `Response` 
+  * `Risk`
+  * `Adenopathy`
+  * `N`
+  * `T`
+  * `Age`
+  * `Gender`
+
+
+
+##### Model Testing 
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+preds <- predict(model_rf, thy_data.train)
+random_forest_test.acc <- mean(preds == thy_data.train$Recurred)
+
+```
+
+```{r, echo=FALSE}
+
+random.forest.confusion_matrix <- table(preds, thy_data.train$Recurred)
+
+dimnames(random.forest.confusion_matrix) <- list(" "= c("Predicted: No", "Predicted: Yes"),
+                                   " " = c("Actual: No", "Actual: Yes"))
+
+print(random.forest.confusion_matrix)
+```
+
+```{r, echo=FALSE}
+cat(paste("Accuracy:" , round(random_forest_test.acc, 4)))
+```
+
+```{r, echo=FALSE, messages=FALSE, warnings=FALSE}
+random.forest.roc <- roc(response = as.numeric(thy_data.train$Recurred), 
+           predictor = as.numeric(preds), 
+           plot=T,
+           col="blue")
+
+random_forest.AUC <- auc(random.forest.roc)
+```
+```{r, echo = FALSE}
+# create a vector with the test metrics for later use 
+random_forest <- c("Accuracy" = random_forest_test.acc, "AUC" = random_forest.AUC)
+```
+
+```{r, echo=FALSE}
+cat(paste("Area Under Curve: ", round(random_forest.AUC, 4)))
+```
+
+
+* The **classification threshold** we used was 0.5 (default)
+* **Random Forest Model Metrics**
+  * **Accuracy: 0.934**
+  * **Area Under Curve: 0.935**
+
+ 
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
